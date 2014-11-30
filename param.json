@@ -1,0 +1,7 @@
+{
+  "source":"",
+  "url":"http:\/\/demo.nginx.com\/status",
+  "username":"",
+  "password":"",
+  "pollInterval":1000
+}
