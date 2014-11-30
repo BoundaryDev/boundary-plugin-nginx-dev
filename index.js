@@ -34,6 +34,69 @@ function parse(x)
     return (isNaN(y) ? 0 : y);
 }
 
+function parseStatsJson(body)
+{
+    // See http://nginx.org/en/docs/http/ngx_http_status_module.html for body format
+    var data = JSON.parse(body);
+    var stats = {};
+    stats.connections = data['connections']['active'] + data['connections']['idle'];
+    stats.accepts = data['connections']['accepted'];
+    stats.nothandled = data['connections']['dropped'];
+    stats.handled = stats.accepts - stats.nothandled;
+    stats.requests = data['requests']['total'];
+    // Note: the JSON status response doesn't explicitly split connections into
+    // Reading and Writing like the text status response does, so we arbitrarily
+    // assume all active connections are Writing rather than Reading.
+    stats.reading = 0;
+    stats.writing = data['connections']['active'];
+    stats.waiting = data['connections']['idle'];
+
+    return stats
+}
+
+function parseStatsText(body)
+{
+    /*
+    See http://nginx.org/en/docs/http/ngx_http_stub_status_module.html for body format.
+    Sample response:
+
+    Active connections: 1
+    server accepts handled requests
+     112 112 121
+    Reading: 0 Writing: 1 Waiting: 0
+     */
+    var stats = {};
+    body.split('\n').forEach(function(line)
+    {
+        if (line.indexOf('Active connections:') === 0)
+        {
+            var active = line.match(/(\w+):\s*(\d+)/);
+            stats[active[1].toLowerCase()] = parse(active[2]);
+        }
+        else if (line.match(/\s*(\d+)\s+(\d+)\s+(\d+)\s*$/))
+        {
+            var match = line.match(/\s*(\d+)\s+(\d+)\s+(\d+)\s*$/);
+            stats.accepts = parse(match[1]);
+            stats.handled = parse(match[2]);
+            stats.requests = parse(match[3]);
+            stats.nothandled = stats.accepts - stats.handled;
+        }
+        else if (line.match(/(\w+):\s*(\d+)/))
+        {
+            while(true)
+            {
+                var kvp = line.match(/(\w+):\s*(\d+)/);
+                if (!kvp)
+                    break;
+
+                stats[kvp[1].toLowerCase()] = parse(kvp[2]);
+                line = line.replace(kvp[0], '');
+            }
+        }
+    });
+    return stats;
+}
+
 // call nginx and parse the stats
 function getStats(cb)
 {
@@ -49,36 +112,13 @@ function getStats(cb)
         if (!body)
             return cb(new Error('Nginx statistics return empty'));
 
-        // parse the output to get each result
-        var stats = {};
-        body.split('\n').forEach(function(line)
-        {
-            if (line.indexOf('Active connections:') === 0)
-            {
-                var active = line.match(/(\w+):\s*(\d+)/);
-                stats[active[1].toLowerCase()] = parse(active[2]);
-            }
-            else if (line.match(/\s*(\d+)\s+(\d+)\s+(\d+)\s*$/))
-            {
-                var match = line.match(/\s*(\d+)\s+(\d+)\s+(\d+)\s*$/);
-                stats.accepts = parse(match[1]);
-                stats.handled = parse(match[2]);
-                stats.requests = parse(match[3]);
-                stats.nothandled = stats.accepts - stats.handled;
-            }
-            else if (line.match(/(\w+):\s*(\d+)/))
-            {
-                while(true)
-                {
-                    var kvp = line.match(/(\w+):\s*(\d+)/);
-                    if (!kvp)
-                        break;
-
-                    stats[kvp[1].toLowerCase()] = parse(kvp[2]);
-                    line = line.replace(kvp[0], '');
-                }
-            }
-        });
+        // if response is json (from nginx enterprise edition) - parse accordingly.  otherwise, parse
+        // as plain text (nginx community edition).
+        var stats;
+        if (resp.headers['content-type'] == 'application/json')
+            stats = parseStatsJson(body);
+        else
+            stats = parseStatsText(body);
 
         return cb(null, stats);
     });
