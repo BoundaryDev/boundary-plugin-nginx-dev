@@ -25,6 +25,19 @@ function diff(a, b)
         return Math.max(a - b, 0);
 }
 
+// accumulate a value and return the difference from the previous value
+function accumulate(key, new_value)
+{
+    if (key in _previous)
+        old_value = _previous[key];
+    else
+        old_value = new_value;
+
+    difference = diff(new_value, old_value);
+    _previous[key] = new_value;
+    return difference;
+}
+
 // validate the input, return 0 if its not an integer
 function parse(x)
 {
@@ -38,20 +51,28 @@ function parseStatsJson(body)
 {
     // See http://nginx.org/en/docs/http/ngx_http_status_module.html for body format
     var data = JSON.parse(body);
-    var stats = {};
-    stats.connections = data['connections']['active'] + data['connections']['idle'];
-    stats.accepts = data['connections']['accepted'];
-    stats.nothandled = data['connections']['dropped'];
-    stats.handled = stats.accepts - stats.nothandled;
-    stats.requests = data['requests']['total'];
-    // Note: the JSON status response doesn't explicitly split connections into
-    // Reading and Writing like the text status response does, so we arbitrarily
-    // assume all active connections are Writing rather than Reading.
-    stats.reading = 0;
-    stats.writing = data['connections']['active'];
-    stats.waiting = data['connections']['idle'];
 
-    return stats
+    console.log('NGINX_ACTIVE_CONNECTIONS %d %s', data['connections']['active'] + data['connections']['idle'], _param.source);
+    console.log('NGINX_WAITING %d %s', data['connections']['idle'], _param.source);
+    var handled = data['connections']['accepted'] - data['connections']['dropped'];
+    console.log('NGINX_HANDLED %d %s', accumulate('NGINX_HANDLED', handled), _param.source);
+    console.log('NGINX_NOT_HANDLED %d %s', data['connections']['dropped'], _param.source);
+    var requests = data['requests']['total'];
+    console.log('NGINX_REQUESTS %d %s', accumulate('NGINX_REQUESTS', requests), _param.source);
+    var requestsPerConnection = (requests > 0 && handled !== 0) ? requests/handled : 0;
+    console.log('NGINX_REQUESTS_PER_CONNECTION %d %s', requestsPerConnection, _param.source);
+
+    for (var zone_name in data.server_zones)
+    {
+        var zone = data.server_zones[zone_name];
+        var src = _param.source + '_' + zone_name;
+        console.log('NGINX_REQUESTS %d %s', accumulate('NGINX_REQUESTS_' + zone_name, zone['requests']), src);
+        console.log('NGINX_RESPONSES %d %s', accumulate('NGINX_RESPONSES_' + zone_name, zone['responses']['total']), src);
+        console.log('NGINX_TRAFFIC_SENT %d %s', accumulate('NGINX_TRAFFIC_SENT_' + zone_name, zone['sent']), src);
+        console.log('NGINX_TRAFFIC_RECEIVED %d %s', accumulate('NGINX_TRAFFIC_RECEIVED_' + zone_name, zone['received']), src);
+    }
+
+    return true;
 }
 
 function parseStatsText(body)
@@ -132,21 +153,25 @@ function poll(cb)
         if (err)
             return console.error(err);
 
-        var handled = ('handled' in _previous) ? diff(current.handled, _previous.handled) : 0;
-        var requests = ('requests' in _previous) ? diff(current.requests, _previous.requests) : 0;
-        var requestsPerConnection = (requests > 0 && handled !== 0) ? requests/handled : 0;
+        // JSON parser handles its own response and gives us "true" - so ignore it if so
+        if (current != true)
+        {
+            var handled = ('handled' in _previous) ? diff(current.handled, _previous.handled) : 0;
+            var requests = ('requests' in _previous) ? diff(current.requests, _previous.requests) : 0;
+            var requestsPerConnection = (requests > 0 && handled !== 0) ? requests / handled : 0;
 
-        _previous = current;
+            _previous = current;
 
-        // Report
-        console.log('NGINX_ACTIVE_CONNECTIONS %d %s', current.connections, _param.source);
-        console.log('NGINX_READING %d %s', current.reading, _param.source);
-        console.log('NGINX_WRITING %d %s', current.writing, _param.source);
-        console.log('NGINX_WAITING %d %s', current.waiting, _param.source);
-        console.log('NGINX_HANDLED %d %s', handled, _param.source);
-        console.log('NGINX_NOT_HANDLED %d %s', current.nothandled, _param.source);
-        console.log('NGINX_REQUESTS %d %s', requests, _param.source);
-        console.log('NGINX_REQUESTS_PER_CONNECTION %d %s', requestsPerConnection, _param.source);
+            // Report
+            console.log('NGINX_ACTIVE_CONNECTIONS %d %s', current.connections, _param.source);
+            console.log('NGINX_READING %d %s', current.reading, _param.source);
+            console.log('NGINX_WRITING %d %s', current.writing, _param.source);
+            console.log('NGINX_WAITING %d %s', current.waiting, _param.source);
+            console.log('NGINX_HANDLED %d %s', handled, _param.source);
+            console.log('NGINX_NOT_HANDLED %d %s', current.nothandled, _param.source);
+            console.log('NGINX_REQUESTS %d %s', requests, _param.source);
+            console.log('NGINX_REQUESTS_PER_CONNECTION %d %s', requestsPerConnection, _param.source);
+        }
     });
 
     setTimeout(poll, _param.pollInterval);
